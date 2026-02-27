@@ -341,57 +341,68 @@ count. Quality over quantity.
 
 ---
 
-## 2-Hour Sprint Plan
+## Sprint Plan
+
+### Pre-Sprint (Before the Clock Starts)
+
+- `brew install ffmpeg`
+- Sign up for Reka API key (`https://platform.reka.ai`)
+- Sign up for Tavily API key (`https://app.tavily.com`)
+- Submit Modulate signup request (`https://www.modulate-developer-apis.com/web/signup-request.html`)
+- Set up burner X account, stay logged in on the OpenClaw browser
+- Test `openclaw agent --agent main --message "open google.com"` - confirm browser control works
 
 ### Hour 0:00 - 0:30 | Foundation (30 min)
 
-**Person A (Infra/OpenClaw):**
-- Verify OpenClaw gateway is running and functional
-- Set up multi-agent workspace structure:
-  - `~/.openclaw/workspace-dispatch/` (the router agent)
-  - `~/.openclaw/workspace-marcus/` (Marcus Aurelius)
-  - `~/.openclaw/workspace-pg/` (Paul Graham)
-  - `~/.openclaw/workspace-jobs/` (Steve Jobs)
-- Configure `openclaw.json` with `agents.list` pointing to each workspace
-- Write the shared AGENTS.md (Layer 2: Agent OS)
-- Test that a basic agent can perform a browser action through OpenClaw
+**Person A (Infra):**
+- Create expert workspaces using `openclaw agents add`:
+  - `openclaw agents add marcus --workspace ~/.openclaw/workspace-marcus`
+  - `openclaw agents add pg --workspace ~/.openclaw/workspace-pg`
+  - `openclaw agents add jobs --workspace ~/.openclaw/workspace-jobs`
+  - `openclaw agents add lincoln --workspace ~/.openclaw/workspace-lincoln`
+- Write shared `AGENTS.md` (the agent OS layer, same file copied to all workspaces)
+- Test one expert workspace end-to-end: `openclaw agent --agent pg --message "open google.com and search for YC application tips"`
+- Confirm browser opens and acts
 
 **Person B (Content/Prompts):**
-- Write the Dispatch Prompt (the router logic)
-- Write three SOUL.md files (Marcus Aurelius, Paul Graham, Steve Jobs)
-- Write the Personality Factory prompt (generates SOUL.md for any person)
-- Test each personality in basic chat to verify the voice is right
+- Write four `SOUL.md` files: Marcus Aurelius, Paul Graham, Steve Jobs, Abe Lincoln
+- Write `IDENTITY.md` for each (name, emoji, portrait URL from Wikipedia)
+- Write the Personality Factory prompt (Tavily search + SOUL.md generator)
+- Test each personality in chat to verify voice is right before wiring to agent
 
-### Hour 0:30 - 1:15 | Core Features (45 min)
+### Hour 0:30 - 1:15 | Core Build (45 min)
 
 **Person A (Infra):**
-- Implement the dispatch flow: user input -> dispatch call -> route to correct agent workspace
-- Implement Personality Factory: dispatch returns unknown expert -> generate SOUL.md -> create workspace -> run agent
-- Implement Passive Mode: heartbeat/cron-based monitoring that triggers dispatch on context changes
-- Test end-to-end: "Apply to YC" -> dispatch picks PG -> PG agent opens browser and starts filling out YC
+- Build the backend server (Next.js API routes):
+  - `POST /api/dispatch` - Bedrock call, returns `{ expert, domain, reasoning, agentId, portraitUrl }`
+  - `POST /api/factory` - Tavily search + Bedrock -> generates SOUL.md, registers new agent, returns agentId
+  - `GET /api/run` - spawns `openclaw agent --agent <id> --message <task>` as subprocess, streams stdout as SSE
+  - `POST /api/transcribe` - receives audio blob, converts with ffmpeg to WAV, sends to Reka Speech API
+- Wire ElevenLabs voice output in each expert workspace `TOOLS.md`
+- Test full flow: text task -> dispatch -> agent runs -> browser moves
 
 **Person B (Content + Demo):**
-- Refine SOUL.md files based on how agents are behaving
-- Design 2-3 demo scenarios that will wow the audience:
-  - "Apply to YC" -> system auto-dispatches Paul Graham, he takes over the browser
-  - "Review my schedule" -> system dispatches Marcus Aurelius for a Stoic take on time management
-  - User is working on a document -> Steve Jobs passively intervenes to fix the design
-  - **Rage bait demo:** Abe Lincoln on X, finding posts, arguing furiously in character, live
-  - **Scalability demo:** ask for a domain with no pre-built expert, watch the system generate one live
-- Start scripting the pitch / demo flow
+- Build the overlay UI (Next.js, minimal):
+  - Voice input button (hold to record, releases to transcribe)
+  - Dispatch animation: "Analyzing..." -> expert card slides in (portrait + name + reasoning)
+  - Voice waveform while expert speaks via ElevenLabs
+  - Keep it small - this lives in the corner, Mac desktop is the real demo surface
+- Refine SOUL.md files based on live agent behavior
+- Script and rehearse the 3 demo scenarios
 
 ### Hour 1:15 - 1:45 | Polish & Demo Prep (30 min)
 
-- End-to-end demo rehearsal
+- Full end-to-end rehearsal of all 3 demo scenarios
+- Tune Abe Lincoln SOUL.md for maximum rage bait quality
 - Fix any bugs in the demo flow
-- If time: add party mode (two agents debating via sessions_send)
-- If time: add voice via OpenClaw's ElevenLabs integration
-- Prepare the pitch narrative
+- If time: add Modulate emotion detection to dispatch context
+- If time: party mode (PG + Jobs debating via sessions_send)
+- Nail the pitch narrative
 
-### Hour 1:45 - 2:00 | Buffer (15 min)
+### Hour 1:45 - 2:00 | Buffer
 
 - Final rehearsal
-- Handle any last-minute issues
+- Last-minute fixes only
 
 ---
 
