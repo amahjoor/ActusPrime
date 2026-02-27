@@ -6,6 +6,7 @@
 // POST /api/generate     - generate a new expert via Personality Factory
 // POST /api/run          - run an expert agent (streaming SSE)
 // POST /api/pipeline     - full pipeline: dispatch -> (generate?) -> run (streaming SSE)
+// POST /api/tts          - text-to-speech via Microsoft Edge Neural TTS
 // POST /api/transcribe   - transcribe audio via Reka Speech API
 // POST /api/emotion      - detect emotion via Modulate API
 // GET  /api/agents       - list registered agents
@@ -19,6 +20,7 @@ import { join } from "path";
 import { fileURLToPath } from "url";
 import { dirname } from "path";
 import "dotenv/config";
+import { tts as edgeTts } from "edge-tts";
 
 import { dispatch, generateExpert, runExpertStream } from "./engine.js";
 
@@ -302,6 +304,66 @@ app.post("/api/emotion", upload.single("audio"), async (req, res) => {
   } catch (e) {
     console.error("[api:emotion]", e.message);
     res.status(500).json({ error: e.message });
+  }
+});
+
+// ── POST /api/tts (Microsoft Edge Neural TTS - free, no API key) ────────────
+
+// Microsoft Edge neural voices mapped to expert archetypes.
+// Full list: https://learn.microsoft.com/en-us/azure/ai-services/speech-service/language-support
+const EDGE_VOICES = {
+  // Deep, authoritative — philosophers, statesmen
+  deep_male: 'en-US-GuyNeural',
+  // Warm, articulate — founders, thought leaders
+  warm_male: 'en-GB-RyanNeural',
+  // Calm, wise — scholars, scientists
+  calm_male: 'en-US-DavisNeural',
+  // Energetic — entrepreneurs, tech leaders
+  energetic_male: 'en-US-JasonNeural',
+  // Female voices for variety
+  authoritative_female: 'en-US-JennyNeural',
+  warm_female: 'en-GB-SoniaNeural',
+  // Default
+  default: 'en-US-GuyNeural',
+};
+
+// Map expert names to voice archetypes
+function getEdgeVoice(expertName) {
+  const lower = (expertName || '').toLowerCase();
+  if (lower.includes('aurelius') || lower.includes('marcus'))
+    return EDGE_VOICES.deep_male;
+  if (lower.includes('lincoln') || lower.includes('abraham'))
+    return EDGE_VOICES.calm_male;
+  if (lower.includes('graham') || lower.includes('paul'))
+    return EDGE_VOICES.warm_male;
+  if (lower.includes('jobs') || lower.includes('steve'))
+    return EDGE_VOICES.energetic_male;
+  if (lower.includes('socrates') || lower.includes('einstein') || lower.includes('aristotle'))
+    return EDGE_VOICES.calm_male;
+  if (lower.includes('curie') || lower.includes('earhart') || lower.includes('cleopatra'))
+    return EDGE_VOICES.authoritative_female;
+  return EDGE_VOICES.default;
+}
+
+app.post('/api/tts', async (req, res) => {
+  try {
+    const { text, expert } = req.body;
+    if (!text) return res.status(400).json({ error: 'text is required' });
+
+    const voice = getEdgeVoice(expert || '');
+
+    console.log(`[tts] Generating speech for "${text.slice(0, 50)}..." voice=${voice}`);
+
+    const audioBuffer = await edgeTts(text, { voice });
+
+    res.setHeader('Content-Type', 'audio/mpeg');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.send(Buffer.from(audioBuffer));
+  } catch (e) {
+    console.error('[api:tts]', e.message);
+    if (!res.headersSent) {
+      res.status(500).json({ error: e.message });
+    }
   }
 });
 

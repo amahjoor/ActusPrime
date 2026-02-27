@@ -303,66 +303,84 @@
     let outputBuffer = ''; // accumulates text for TTS
     let isMuted = false;
 
-    // ── TTS Voice Output ─────────────────────────
+    // ── TTS Voice Output (Edge Neural TTS via server, Web Speech API fallback) ──
 
     const synth = window.speechSynthesis;
-    let voiceReady = false;
     let voices = [];
-
-    function loadVoices() {
-      voices = synth.getVoices();
-      voiceReady = voices.length > 0;
-    }
+    function loadVoices() { voices = synth.getVoices(); }
     loadVoices();
     synth.onvoiceschanged = loadVoices;
 
-    // Pick a voice that fits the expert's character
-    function getVoiceForExpert(name) {
-      if (!voiceReady) loadVoices();
-      const lower = name.toLowerCase();
+    // Audio queue for sequential playback
+    let ttsQueue = [];
+    let ttsPlaying = false;
+    let ttsServerAvailable = true; // falls back to Web Speech if server TTS fails
 
-      // Try to pick distinct voices per expert for demo variety
-      // Prefer English voices, vary by gender/accent
-      const findVoice = (...keywords) => {
-        for (const kw of keywords) {
-          const v = voices.find(v =>
-            v.name.toLowerCase().includes(kw) && v.lang.startsWith('en')
-          );
-          if (v) return v;
+    async function playNextInQueue() {
+      if (ttsPlaying || ttsQueue.length === 0) return;
+      ttsPlaying = true;
+
+      const { text, expert } = ttsQueue.shift();
+
+      if (ttsServerAvailable) {
+        try {
+          const res = await fetch(`${API}/api/tts`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text, expert }),
+          });
+
+          if (!res.ok) throw new Error(`TTS ${res.status}`);
+
+          const audioBlob = await res.blob();
+          const audioUrl = URL.createObjectURL(audioBlob);
+          const audio = new Audio(audioUrl);
+
+          audio.onended = () => {
+            URL.revokeObjectURL(audioUrl);
+            ttsPlaying = false;
+            playNextInQueue();
+          };
+          audio.onerror = () => {
+            URL.revokeObjectURL(audioUrl);
+            ttsPlaying = false;
+            playNextInQueue();
+          };
+
+          await audio.play();
+          return;
+        } catch (e) {
+          console.warn('[tts] Server TTS failed, falling back to Web Speech:', e.message);
+          ttsServerAvailable = false;
         }
-        return null;
-      };
+      }
 
-      if (lower.includes('aurelius') || lower.includes('marcus')) {
-        return findVoice('daniel', 'james', 'oliver') || voices.find(v => v.lang.startsWith('en'));
-      }
-      if (lower.includes('jobs') || lower.includes('steve')) {
-        return findVoice('alex', 'fred', 'tom') || voices.find(v => v.lang.startsWith('en'));
-      }
-      if (lower.includes('lincoln') || lower.includes('abraham')) {
-        return findVoice('aaron', 'gordon', 'ralph') || voices.find(v => v.lang.startsWith('en'));
-      }
-      if (lower.includes('graham') || lower.includes('paul')) {
-        return findVoice('evan', 'lee', 'nathan') || voices.find(v => v.lang.startsWith('en'));
-      }
-      // Default: first English voice
-      return voices.find(v => v.lang.startsWith('en')) || voices[0];
+      // Fallback: Web Speech API
+      const utterance = new SpeechSynthesisUtterance(text);
+      const voice = voices.find(v => v.lang.startsWith('en')) || voices[0];
+      if (voice) utterance.voice = voice;
+      utterance.rate = 1.05;
+      utterance.onend = () => { ttsPlaying = false; playNextInQueue(); };
+      utterance.onerror = () => { ttsPlaying = false; playNextInQueue(); };
+      synth.speak(utterance);
     }
 
     function speakText(text) {
-      if (!text.trim() || !synth || isMuted) return;
-      // Queue the utterance - don't cancel ongoing speech
-      const utterance = new SpeechSynthesisUtterance(text);
-      const voice = getVoiceForExpert(currentExpertName);
-      if (voice) utterance.voice = voice;
-      utterance.rate = 1.05;
-      utterance.pitch = 1.0;
-      synth.speak(utterance);
+      if (!text.trim() || isMuted) return;
+      ttsQueue.push({ text, expert: currentExpertName });
+      playNextInQueue();
+    }
+
+    function cancelAllSpeech() {
+      ttsQueue = [];
+      ttsPlaying = false;
+      synth.cancel();
+      // Stop any playing HTML5 audio elements
+      document.querySelectorAll('audio').forEach(a => { a.pause(); a.remove(); });
     }
 
     // Flush accumulated output buffer as speech at sentence boundaries
     function flushSpeechBuffer() {
-      // Keep flushing while there are complete sentences
       let match;
       while ((match = outputBuffer.match(/^([\s\S]*?[.!?:]["'\s])/))) {
         const sentence = match[1].trim();
@@ -401,7 +419,7 @@
       sendBtn.disabled = true;
       outputFeed.textContent = '';
       outputBuffer = '';
-      synth.cancel();
+      cancelAllSpeech();
       expertCard.className = 'expert-card';
 
       setStatus('Analyzing task...', 'dispatching');
@@ -471,7 +489,7 @@
       isMuted = !isMuted;
       muteBtn.textContent = isMuted ? '\u{1F507}' : '\u{1F50A}';
       muteBtn.classList.toggle('muted', isMuted);
-      if (isMuted) synth.cancel();
+      if (isMuted) cancelAllSpeech();
     });
 
     sendBtn.addEventListener('click', () => {
