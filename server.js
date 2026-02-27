@@ -234,8 +234,10 @@ app.post("/api/transcribe", upload.single("audio"), async (req, res) => {
           "X-Api-Key": REKA_API_KEY,
         },
         body: JSON.stringify({
-          model: "reka-tiny-asr",
           audio_url: audioUrl,
+          sampling_rate: 16000,
+          temperature: 0.0,
+          max_tokens: 1024,
         }),
       }
     );
@@ -247,7 +249,7 @@ app.post("/api/transcribe", upload.single("audio"), async (req, res) => {
 
     const rekaData = await rekaRes.json();
     res.json({
-      text: rekaData.text || rekaData.transcription || "",
+      text: rekaData.transcript || rekaData.text || "",
       raw: rekaData,
     });
   } catch (e) {
