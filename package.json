@@ -4,6 +4,10 @@
   "description": "",
   "main": "index.js",
   "scripts": {
+    "dispatch": "node engine.js dispatch",
+    "generate": "node engine.js generate",
+    "run": "node engine.js run",
+    "pipeline": "node engine.js pipeline",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "repository": {
@@ -13,7 +17,7 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "type": "commonjs",
+  "type": "module",
   "bugs": {
     "url": "https://github.com/amahjoor/ActusPrime/issues"
   },
