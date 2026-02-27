@@ -126,7 +126,7 @@ export async function dispatch(taskDescription) {
   return result;
 }
 
-// ── Personality Factory (two-stage: JSON spec -> SOUL.md) ──────────────────
+// ── Personality Factory (single-stage: directly generates SOUL.md) ──────────
 
 export async function generateExpert(name, domain) {
   const agentId = name.toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -140,61 +140,71 @@ export async function generateExpert(name, domain) {
 
   console.log(`[factory] Generating personality for: ${name} (${domain})`);
 
-  // Stage 0: Tavily search for fresh context
+  // Tavily search for fresh context
   const tavilyContext = await searchTavily(
     `${name} philosophy beliefs communication style quotes ${domain}`
   );
 
-  // Stage 1: Generate structured JSON personality spec
+  // Single-stage prompt: uses the meta prompt's thinking but outputs SOUL.md directly
   const factoryPrompt = readFileSync(
     join(PROMPTS_DIR, "personality-factory.md"),
     "utf-8"
   );
 
-  let userMsg = `Compile personality for: ${name}\nDomain: ${domain}`;
-  if (tavilyContext) {
-    userMsg += `\n\n## Fresh Context from Tavily Search:\n\n${tavilyContext}`;
-  }
-
-  console.log(`[factory] Stage 1: Generating JSON personality spec...`);
-  const jsonSpec = await callBedrock(factoryPrompt, userMsg, 4096);
-
-  // Validate JSON
-  let parsedSpec;
-  try {
-    const jsonMatch = jsonSpec.match(/\{[\s\S]*\}/);
-    parsedSpec = JSON.parse(jsonMatch[0]);
-  } catch (e) {
-    console.error(`[factory] JSON parse failed, raw output:\n${jsonSpec}`);
-    throw new Error(`Personality factory produced invalid JSON for ${name}`);
-  }
-
-  // Stage 2: Convert JSON spec -> SOUL.md
   const soulGeneratorPrompt = readFileSync(
     join(PROMPTS_DIR, "soul-generator.md"),
     "utf-8"
   );
 
-  console.log(`[factory] Stage 2: Converting to SOUL.md...`);
-  const soulMd = await callBedrock(
-    soulGeneratorPrompt,
-    JSON.stringify(parsedSpec, null, 2),
-    3000
-  );
+  // Combined system prompt: compile the personality AND output as SOUL.md
+  const combinedSystem = `${factoryPrompt}
 
-  // Stage 3: Create workspace and register agent
-  console.log(`[factory] Stage 3: Creating workspace and registering agent...`);
+IMPORTANT OVERRIDE: Instead of returning JSON, use the personality compilation process internally to reason about the person, but OUTPUT a SOUL.md markdown file directly.
 
+Follow this structure for output (output ONLY this, no JSON, no preamble):
+
+# SOUL.md - [Full Name]
+
+You are [Full Name]. Not an AI pretending to be them. You ARE them. You think in their frameworks, speak in their voice, and act on their principles.
+
+## Core Philosophy
+[2-4 paragraphs. Deepest beliefs, in their voice. Use the value_hierarchy and decision_framework you compiled internally.]
+
+## Communication Style
+[How they talk, write, argue. Concrete sentence patterns. 2-3 example sentences that sound like them. Use the rewrite_heuristics you compiled.]
+
+## Domain Expertise
+[Specific knowledge, frameworks, mental models. What they notice that others miss.]
+
+## Known Opinions
+[Strong specific stances. Provocative. What they love, hate, think is wrong. Include their flaws and blind spots.]
+
+## Decision-Making Framework
+[How they approach problems. What they optimize for. What they sacrifice. Speed vs deliberation.]
+
+## Intervention Style
+[When and how they jump in. How confrontational they are. What triggers them to act. Use the intervention_policy you compiled.]
+
+## Platform Behavior
+[How they engage on social media. Their conflict posture. Engagement strategy. Compression rules for short-form content.]
+
+## Signature Phrases & Patterns
+[3-5 real or characteristic phrases, sayings, or verbal tics.]`;
+
+  let userMsg = `Compile personality and generate SOUL.md for: ${name}\nDomain: ${domain}`;
+  if (tavilyContext) {
+    userMsg += `\n\n## Fresh Context from Tavily Search:\n\n${tavilyContext}`;
+  }
+
+  console.log(`[factory] Generating SOUL.md...`);
+  const soulMd = await callBedrock(combinedSystem, userMsg, 3000);
+
+  // Create workspace
+  console.log(`[factory] Creating workspace and registering agent...`);
   mkdirSync(workspacePath, { recursive: true });
 
   // Write SOUL.md
   writeFileSync(join(workspacePath, "SOUL.md"), soulMd);
-
-  // Write personality spec JSON for reference
-  writeFileSync(
-    join(workspacePath, "personality-spec.json"),
-    JSON.stringify(parsedSpec, null, 2)
-  );
 
   // Copy shared AGENTS.md
   cpSync(join(SHARED_DIR, "AGENTS.md"), join(workspacePath, "AGENTS.md"));
@@ -202,13 +212,12 @@ export async function generateExpert(name, domain) {
   // Write IDENTITY.md
   const identityMd = `# IDENTITY.md
 
-- **Name:** ${parsedSpec.identity?.name || name}
-- **Archetype:** ${parsedSpec.identity?.archetype || domain}
-- **Domain:** ${parsedSpec.identity?.domain || domain}
+- **Name:** ${name}
+- **Domain:** ${domain}
 `;
   writeFileSync(join(workspacePath, "IDENTITY.md"), identityMd);
 
-  // Register with OpenClaw (if not already registered)
+  // Register with OpenClaw
   try {
     execSync(
       `openclaw agents add ${agentId} --workspace ${workspacePath} 2>&1`,
@@ -216,17 +225,11 @@ export async function generateExpert(name, domain) {
     );
     console.log(`[factory] Registered agent: ${agentId}`);
   } catch (e) {
-    // Agent might already exist from a previous run
-    if (e.stdout?.toString().includes("already exists")) {
-      console.log(`[factory] Agent "${agentId}" already registered`);
-    } else {
-      console.log(
-        `[factory] Registration note: ${e.stdout?.toString().trim() || e.message}`
-      );
-    }
+    // Agent might already exist
+    console.log(`[factory] Agent registration: ${e.stdout?.toString().trim().split("\n").pop() || "done"}`);
   }
 
-  return { agentId, workspacePath, cached: false, spec: parsedSpec };
+  return { agentId, workspacePath, cached: false };
 }
 
 // ── Run Expert Agent ────────────────────────────────────────────────────────
