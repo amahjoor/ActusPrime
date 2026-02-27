@@ -17,8 +17,5 @@
   "bugs": {
     "url": "https://github.com/amahjoor/ActusPrime/issues"
   },
-  "homepage": "https://github.com/amahjoor/ActusPrime#readme",
-  "dependencies": {
-    "@aws-sdk/client-bedrock-runtime": "^3.1000.0"
-  }
+  "homepage": "https://github.com/amahjoor/ActusPrime#readme"
 }
