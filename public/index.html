@@ -237,6 +237,20 @@
       background: rgba(239, 68, 68, 0.4);
       animation: pulse 1s ease-in-out infinite;
     }
+
+    .btn-mute {
+      background: none;
+      border: none;
+      font-size: 18px;
+      cursor: pointer;
+      opacity: 0.5;
+      margin-left: auto;
+      padding: 4px 8px;
+      transition: opacity 0.2s;
+    }
+
+    .btn-mute:hover { opacity: 0.8; }
+    .btn-mute.muted { opacity: 0.2; }
   </style>
 </head>
 <body>
@@ -244,6 +258,7 @@
     <div class="header">
       <div class="dot"></div>
       <h1>Actus Prime</h1>
+      <button class="btn-mute" id="mute-btn" title="Toggle voice output">&#128266;</button>
     </div>
 
     <div id="expert-card" class="expert-card">
@@ -279,12 +294,14 @@
     const taskInput = document.getElementById('task-input');
     const sendBtn = document.getElementById('send-btn');
     const micBtn = document.getElementById('mic-btn');
+    const muteBtn = document.getElementById('mute-btn');
 
     let isRunning = false;
     let mediaRecorder = null;
     let audioChunks = [];
     let currentExpertName = '';
     let outputBuffer = ''; // accumulates text for TTS
+    let isMuted = false;
 
     // ── TTS Voice Output ─────────────────────────
 
@@ -333,10 +350,8 @@
     }
 
     function speakText(text) {
-      if (!text.trim() || !synth) return;
-      // Cancel any ongoing speech
-      synth.cancel();
-
+      if (!text.trim() || !synth || isMuted) return;
+      // Queue the utterance - don't cancel ongoing speech
       const utterance = new SpeechSynthesisUtterance(text);
       const voice = getVoiceForExpert(currentExpertName);
       if (voice) utterance.voice = voice;
@@ -347,12 +362,12 @@
 
     // Flush accumulated output buffer as speech at sentence boundaries
     function flushSpeechBuffer() {
-      // Split on sentence endings
-      const sentenceEnd = outputBuffer.match(/^([\s\S]*?[.!?]\s)/);
-      if (sentenceEnd) {
-        const sentence = sentenceEnd[1].trim();
-        outputBuffer = outputBuffer.slice(sentenceEnd[1].length);
-        if (sentence) speakText(sentence);
+      // Keep flushing while there are complete sentences
+      let match;
+      while ((match = outputBuffer.match(/^([\s\S]*?[.!?:]["'\s])/))) {
+        const sentence = match[1].trim();
+        outputBuffer = outputBuffer.slice(match[1].length);
+        if (sentence.length > 5) speakText(sentence);
       }
     }
 
@@ -451,6 +466,13 @@
     }
 
     // ── Event listeners ──────────────────────────
+
+    muteBtn.addEventListener('click', () => {
+      isMuted = !isMuted;
+      muteBtn.textContent = isMuted ? '\u{1F507}' : '\u{1F50A}';
+      muteBtn.classList.toggle('muted', isMuted);
+      if (isMuted) synth.cancel();
+    });
 
     sendBtn.addEventListener('click', () => {
       const task = taskInput.value.trim();
