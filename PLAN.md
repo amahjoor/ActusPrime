@@ -446,3 +446,35 @@ count. Quality over quantity.
 | Social media login/captcha walls | Set up a burner X/Reddit account beforehand, stay logged in, test posting works before demo. |
 | Rage bait produces boring output | Tune the Abe Lincoln SOUL.md to be maximally disagreeable. Test it manually before the demo. |
 | Post gets flagged/removed mid-demo | Expected and fine. Actually funnier if it happens live. |
+
+---
+
+## Build Progress (Live)
+
+### Done
+- [x] ffmpeg installed
+- [x] 5 OpenClaw agent workspaces created (marcus, pg, jobs, lincoln + main)
+- [x] Shared AGENTS.md (Agent OS layer) written and deployed to all workspaces
+- [x] Personality Factory meta prompt (compiles ANY person into personality spec)
+- [x] Soul Generator prompt (converts spec to SOUL.md)
+- [x] Dispatch prompt (routes tasks to best expert)
+- [x] Core engine (engine.js): dispatch, factory, agent runner with Bedrock bearer token
+- [x] Tavily integration in Personality Factory (enriches unknown experts)
+- [x] Generated SOUL.md for 4 launch experts via factory
+- [x] API server (server.js): dispatch, generate, run SSE, transcribe, emotion endpoints
+- [x] Reka Speech transcription endpoint (voice input)
+- [x] Modulate emotion detection endpoint
+- [x] Overlay UI: expert card, dispatch animation, voice input, SSE output feed
+- [x] TTS voice output: experts speak responses via Web Speech API with sentence queueing
+- [x] Mute/unmute toggle for voice
+- [x] Dispatch tested end-to-end (Bedrock API working)
+- [x] Personality Factory tested end-to-end (generates any expert on demand)
+
+### In Progress
+- [ ] Chrome browser install + extension setup (needed for live browser control)
+
+### Remaining
+- [ ] Test full pipeline through overlay UI
+- [ ] ElevenLabs TTS for higher quality voice (needs API key)
+- [ ] Passive mode via heartbeat
+- [ ] Party mode (multi-agent debate)
