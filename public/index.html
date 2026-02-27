@@ -283,6 +283,78 @@
     let isRunning = false;
     let mediaRecorder = null;
     let audioChunks = [];
+    let currentExpertName = '';
+    let outputBuffer = ''; // accumulates text for TTS
+
+    // ── TTS Voice Output ─────────────────────────
+
+    const synth = window.speechSynthesis;
+    let voiceReady = false;
+    let voices = [];
+
+    function loadVoices() {
+      voices = synth.getVoices();
+      voiceReady = voices.length > 0;
+    }
+    loadVoices();
+    synth.onvoiceschanged = loadVoices;
+
+    // Pick a voice that fits the expert's character
+    function getVoiceForExpert(name) {
+      if (!voiceReady) loadVoices();
+      const lower = name.toLowerCase();
+
+      // Try to pick distinct voices per expert for demo variety
+      // Prefer English voices, vary by gender/accent
+      const findVoice = (...keywords) => {
+        for (const kw of keywords) {
+          const v = voices.find(v =>
+            v.name.toLowerCase().includes(kw) && v.lang.startsWith('en')
+          );
+          if (v) return v;
+        }
+        return null;
+      };
+
+      if (lower.includes('aurelius') || lower.includes('marcus')) {
+        return findVoice('daniel', 'james', 'oliver') || voices.find(v => v.lang.startsWith('en'));
+      }
+      if (lower.includes('jobs') || lower.includes('steve')) {
+        return findVoice('alex', 'fred', 'tom') || voices.find(v => v.lang.startsWith('en'));
+      }
+      if (lower.includes('lincoln') || lower.includes('abraham')) {
+        return findVoice('aaron', 'gordon', 'ralph') || voices.find(v => v.lang.startsWith('en'));
+      }
+      if (lower.includes('graham') || lower.includes('paul')) {
+        return findVoice('evan', 'lee', 'nathan') || voices.find(v => v.lang.startsWith('en'));
+      }
+      // Default: first English voice
+      return voices.find(v => v.lang.startsWith('en')) || voices[0];
+    }
+
+    function speakText(text) {
+      if (!text.trim() || !synth) return;
+      // Cancel any ongoing speech
+      synth.cancel();
+
+      const utterance = new SpeechSynthesisUtterance(text);
+      const voice = getVoiceForExpert(currentExpertName);
+      if (voice) utterance.voice = voice;
+      utterance.rate = 1.05;
+      utterance.pitch = 1.0;
+      synth.speak(utterance);
+    }
+
+    // Flush accumulated output buffer as speech at sentence boundaries
+    function flushSpeechBuffer() {
+      // Split on sentence endings
+      const sentenceEnd = outputBuffer.match(/^([\s\S]*?[.!?]\s)/);
+      if (sentenceEnd) {
+        const sentence = sentenceEnd[1].trim();
+        outputBuffer = outputBuffer.slice(sentenceEnd[1].length);
+        if (sentence) speakText(sentence);
+      }
+    }
 
     // ── Send task ────────────────────────────────
 
@@ -313,6 +385,8 @@
       isRunning = true;
       sendBtn.disabled = true;
       outputFeed.textContent = '';
+      outputBuffer = '';
+      synth.cancel();
       expertCard.className = 'expert-card';
 
       setStatus('Analyzing task...', 'dispatching');
@@ -343,6 +417,7 @@
 
               if (data.type === 'dispatch') {
                 showExpert(data);
+                currentExpertName = data.expert;
                 setStatus(`${data.expert} is taking over...`);
               } else if (data.type === 'status') {
                 const cls = data.stage === 'dispatch' ? 'dispatching' :
@@ -351,8 +426,16 @@
               } else if (data.type === 'output') {
                 outputFeed.textContent += data.text;
                 outputFeed.scrollTop = outputFeed.scrollHeight;
+                // Buffer text for TTS and speak at sentence boundaries
+                outputBuffer += data.text;
+                flushSpeechBuffer();
               } else if (data.type === 'done') {
                 clearStatus();
+                // Speak any remaining buffered text
+                if (outputBuffer.trim()) {
+                  speakText(outputBuffer.trim());
+                  outputBuffer = '';
+                }
               } else if (data.type === 'error') {
                 setStatus('Error: ' + data.message, '');
               }
