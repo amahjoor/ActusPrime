@@ -30,6 +30,8 @@ The user doesn't manage experts. The system IS the expert.
 
 5. **Multi-agent party mode.** Multiple personalities can collaborate, debate, or argue about a problem. Your personal cabinet of advisors. Paul Graham and Steve Jobs arguing about whether your product is simple enough.
 
+6. **Social media autonomy.** The agent browses platforms like X, Reddit, or LinkedIn, finds relevant posts, and engages with them in character - with full personality intact. This can range from high-value one-sentence insights (LinkedIn growth hack) to maximum-disagreement rage bait (Abe Lincoln furiously arguing with strangers on X). The KPI: rage baits per session.
+
 ---
 
 ## Core Features (Priority Order)
@@ -74,9 +76,18 @@ The user doesn't manage experts. The system IS the expert.
   - You're making a financial decision -> Warren Buffett weighs in
 - The intervention is the demo moment. This is what makes the audience laugh and gets them excited.
 
+**5. Social Media Agent (Rage Bait Mode)**
+- The agent autonomously browses X, Reddit, or LinkedIn, finds posts, and comments on them in character.
+- Two sub-modes:
+  - **Growth mode:** High-value, on-brand one-sentence comments to build presence. Paul Graham dropping startup wisdom on founder posts. Gets real engagement.
+  - **Rage bait mode:** Maximum disagreement, fully in character, as angry as possible. Abe Lincoln furiously disputing modern takes. Marcus Aurelius calling out moral failures. The agent hunts for posts and goes in.
+- The demo: spin it up live, point it at X, watch what happens in real time. The audience sees real comments posted to real accounts.
+- KPI: rage baits per session.
+- OpenClaw's browser control handles all of this natively - navigate, find posts, click reply, type comment, submit.
+
 ### P1 - High Impact, Build If Time Allows
 
-**5. Multi-Agent Party Mode**
+**6. Multi-Agent Party Mode**
 - Multiple agents active simultaneously.
 - They can debate a topic, collaborate on a task, or provide competing perspectives.
 - "Personality roulette" - randomly cycle which personality is active, creating chaotic but entertaining results.
@@ -224,6 +235,7 @@ Given a task or context snapshot, determine which expert should handle it.
 - Task: "I've been working 14 hours straight" -> Marcus Aurelius (Stoic philosophy on balance and discipline)
 - Task: "Set up a value investing portfolio" -> Benjamin Graham (father of value investing)
 - Task: "Write a cold outreach email" -> Dale Carnegie (wrote the book on influence and persuasion)
+- Task: "Go rage bait people on X" -> Abe Lincoln (maximum contrast: 1860s statesman vs. modern internet discourse, maximally funny)
 ```
 
 ### Layer 1: Personality Frame (SOUL.md per expert)
@@ -337,6 +349,7 @@ count. Quality over quantity.
   - "Apply to YC" -> system auto-dispatches Paul Graham, he takes over the browser
   - "Review my schedule" -> system dispatches Marcus Aurelius for a Stoic take on time management
   - User is working on a document -> Steve Jobs passively intervenes to fix the design
+  - **Rage bait demo:** Abe Lincoln on X, finding posts, arguing furiously in character, live
   - **Scalability demo:** ask for a domain with no pre-built expert, watch the system generate one live
 - Start scripting the pitch / demo flow
 
@@ -361,7 +374,9 @@ count. Quality over quantity.
 
 **Hook:** Type "Apply to YC for me." Don't pick an expert. The system dispatches Paul Graham automatically. The audience sees the dispatch reasoning flash on screen, then PG takes over the browser and starts filling out the application in real-time.
 
-**Auto-routing demo:** Type "Set up a paper trading portfolio." The system summons Benjamin Graham (or Warren Buffett). No one pre-configured this expert. The Personality Factory generated them on the spot. This proves scalability.
+**Rage bait demo (the crowd-pleaser):** Point Abe Lincoln at X. Tell him to find posts he disagrees with and respond as angrily as possible. Show the browser: Lincoln navigating, reading posts, typing furious 1860s-style rebuttals in real time. Show the actual posted comments. The audience loses it.
+
+**Growth mode contrast:** Show Paul Graham doing the same thing on LinkedIn but constructively - one-sentence startup insights on founder posts. Real comments, real engagement, same underlying system.
 
 **Passive demo:** Show someone working on a document. Marcus Aurelius intervenes unprompted with a relevant Stoic insight. The audience laughs.
 
@@ -369,7 +384,7 @@ count. Quality over quantity.
 
 **Party mode (if built):** Show two agents debating a decision. The audience sees the conflict play out.
 
-**Close:** "Any task. Any domain. The right expert shows up. Your personal cabinet of the greatest minds in history, actually doing the work."
+**Close:** "Any task. Any domain. The right expert shows up. Your personal cabinet of the greatest minds in history, actually doing the work. And yes, Abe Lincoln will argue with strangers on the internet on your behalf."
 
 ---
 
@@ -390,4 +405,6 @@ count. Quality over quantity.
 | System prompts don't capture personality well | Iterate fast. Test in chat before wiring to agent. |
 | Running out of time | Strict time-boxing. Cut party mode first. Dispatch + 3 experts + active mode is the minimum viable demo. |
 | Demo goes wrong live | Have a recorded backup. Script the demo path precisely. |
-| Multi-workspace OpenClaw config is tricky | Fall back to single workspace with dynamic SOUL.md swapping if multi-agent routing is too complex. |
+| Social media login/captcha walls | Set up a burner X/Reddit account beforehand, stay logged in, test posting works before demo. |
+| Rage bait produces boring output | Tune the Abe Lincoln SOUL.md to be maximally disagreeable. Test it manually before the demo. |
+| Post gets flagged/removed mid-demo | Expected and fine. Actually funnier if it happens live. |
