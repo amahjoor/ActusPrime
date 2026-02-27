@@ -112,42 +112,59 @@ The user doesn't manage experts. The system IS the expert.
 
 ```
 +--------------------------------------------------+
-|              User Input / Passive Monitor         |
-|  "Apply to YC" / detects user writing a pitch    |
+|           Voice Input (Reka Speech API)           |
+|  User speaks task -> WAV -> transcribed text      |
+|  + Modulate: emotion/tone detection from audio    |
 +--------------------------------------------------+
                         |
 +--------------------------------------------------+
 |            Expert Dispatch Layer                  |
-|  - Analyzes task/context                         |
-|  - Determines best expert (person + domain)      |
-|  - Checks pre-built roster first                 |
-|  - Falls back to Personality Factory             |
+|  - Direct Bedrock API call (NOT an OpenClaw agent)|
+|  - Analyzes task text + emotional context         |
+|  - Determines best expert (person + domain)       |
+|  - Checks pre-built roster first                  |
+|  - Falls back to Personality Factory              |
+|  - Returns: { expert, domain, reasoning, agentId }|
 +--------------------------------------------------+
                         |
+           +------------+------------+
+           |                         |
++----------+----------+   +----------+----------+
+| Pre-built expert    |   | Personality Factory  |
+| (marcus/pg/jobs/    |   | Tavily searches for  |
+|  lincoln/etc.)      |   | expert -> LLM writes |
+| Hand-crafted SOUL.md|   | SOUL.md on the fly   |
+| Already registered  |   | New workspace created|
+| in OpenClaw         |   | Agent registered     |
++----------+----------+   +----------+----------+
+           |                         |
+           +------------+------------+
+                        |
 +--------------------------------------------------+
-|        System Prompt Composer                     |
-|  Layer 1: Personality Frame (per expert)          |
-|    - Pre-built (hand-crafted SOUL.md files)       |
-|    - OR generated on-the-fly by factory           |
-|  Layer 2: Agent OS (shared AGENTS.md)             |
-|  Combined into workspace config at runtime        |
+|  openclaw agent --agent <id> --message "<task>"  |
+|  Streams stdout -> SSE -> frontend               |
 +--------------------------------------------------+
                         |
 +--------------------------------------------------+
 |              OpenClaw Gateway                     |
-|  - Runs the agent with composed personality       |
-|  - Browser control (CDP/managed Chrome)           |
-|  - File system access                             |
-|  - Memory & learning (MEMORY.md, daily logs)      |
-|  - Skills (community + custom)                    |
-|  - Messaging integrations                         |
-|  - Multi-agent via sessions_send                  |
+|  - Expert agent runs with their SOUL.md          |
+|  - Browser control (CDP/managed Chrome) - LIVE   |
+|  - File system access                            |
+|  - Memory (MEMORY.md, daily logs)                |
+|  - ElevenLabs TTS: expert narrates actions live  |
++--------------------------------------------------+
+                        |
++--------------------------------------------------+
+|           Minimal Overlay UI                      |
+|  - Expert portrait (Wikipedia/public domain URL)  |
+|  - Expert name + dispatch reasoning              |
+|  - Voice waveform during speech                  |
+|  - Small always-on-top window, corner of screen  |
+|  - Mac desktop IS the demo surface               |
 +--------------------------------------------------+
 ```
 
 ### How It Maps to OpenClaw
-
-OpenClaw's architecture is a perfect fit. Here's what we use:
 
 | Actus Prime Concept | OpenClaw Mechanism |
 |---|---|
@@ -158,49 +175,59 @@ OpenClaw's architecture is a perfect fit. Here's what we use:
 | Computer use | Built-in browser control, file system access, `system.run` |
 | Passive monitoring | Heartbeat runs (`HEARTBEAT.md`), cron jobs, webhook triggers |
 | Multi-agent | `agents.list` with separate workspaces + `sessions_send` for inter-agent communication |
-| Expert dispatch | A "router" agent that receives the task, picks the expert, then forwards to the right agent workspace |
-| Personality Factory | A skill or dispatch function that generates SOUL.md content on the fly |
-| Skills/tools | Custom skills in `<workspace>/skills/` folders |
+| Expert dispatch | Direct Bedrock API call - fast, no agent overhead |
+| Personality Factory | Tavily search + LLM generates SOUL.md, `openclaw agents add` registers it |
+| Expert voice | ElevenLabs TTS already in OpenClaw, wired per-agent |
 
 ### How Expert Dispatch Works (Technical)
 
-The dispatch is a lightweight LLM call. It doesn't need OpenClaw's full agent machinery:
+Dispatch is a direct Bedrock API call from the backend - NOT an OpenClaw agent. Fast, cheap, no agent startup overhead.
 
 ```
-Input: user task description OR passive context snapshot
-System prompt: "You are the Actus Prime dispatcher. Given a task,
-  determine which historical or modern expert is best suited.
-  Consider domain expertise, known philosophies, and public
-  writings. Return the expert's name, their domain, and a
-  1-sentence reasoning."
+Input: transcribed task text + Modulate emotion signal
+System prompt: "You are the Actus Prime dispatcher..."
 
-Output: { expert: "Paul Graham", domain: "startups", reason: "..." }
+Output: { expert: "Paul Graham", domain: "startups", reason: "...", agentId: "pg" }
 ```
 
-If the expert is in the pre-built roster (Marcus Aurelius, Paul Graham, Steve Jobs), we use the hand-crafted workspace. If not, we hit the Personality Factory.
+If `agentId` maps to a pre-built workspace, invoke immediately. If not, hit the Personality Factory first, then invoke.
 
 ### How the Personality Factory Works
 
-Another LLM call that generates a SOUL.md for any public figure:
-
-```
-Input: expert name + domain from dispatch
-System prompt: "Generate a SOUL.md personality frame for [expert].
-  Include: their core philosophy, communication style, domain
-  expertise, known opinions, and decision-making framework.
-  Use only publicly known information."
-
-Output: Complete SOUL.md content
-```
-
-This gets written to a new workspace directory, and an OpenClaw agent is spun up with it. The quality won't match hand-crafted personalities, but it works for anyone. The LLM already knows about most public figures from training data.
+Two-step process:
+1. **Tavily search:** `tavily_client.search("Paul Graham startup philosophy writing style")` - pulls real, fresh quotes and context.
+2. **LLM generates SOUL.md:** Bedrock call with Tavily results as context. Output is a complete SOUL.md.
+3. **Register:** `openclaw agents add <name> --workspace ~/.openclaw/workspace-<name>` + write SOUL.md to disk.
+4. **Invoke:** `openclaw agent --agent <name> --message "<task>"`
 
 ### Key Technical Decisions
 
-- **OpenClaw as the base.** Already set up. Handles the hard parts: computer control, browser automation, memory, self-improvement. We build on top, not from scratch.
-- **System prompts over fine-tuning/RAG.** For a hackathon, well-crafted system prompts pull from the LLM's existing training data about these public figures. RAG would add maybe 10-15% improvement but cost hours of setup. Not worth it in a 2-hour sprint.
-- **Workspace-per-expert pattern.** Each expert gets their own OpenClaw workspace directory with their SOUL.md, AGENTS.md, IDENTITY.md. OpenClaw's multi-agent config routes to the right workspace.
-- **Dispatch is separate from execution.** The router is fast and cheap (small prompt, small output). The expert agent is the expensive one that actually does work. This keeps latency low for the "who should handle this?" decision.
+- **Dispatch is NOT an OpenClaw agent.** Direct Bedrock API call. Faster, simpler, no session overhead.
+- **Separate named workspaces per expert.** Sub-agents don't load SOUL.md (confirmed in OpenClaw docs). Each expert needs their own `openclaw agents add` workspace.
+- **stdout streaming via SSE.** `openclaw agent` subprocess stdout piped through a Next.js API route as Server-Sent Events to the frontend. Simple, works today.
+- **Audio conversion required.** Browser MediaRecorder outputs WebM. Reka Speech requires WAV at 16kHz. Need `ffmpeg` server-side for conversion (`brew install ffmpeg`).
+- **Expert portraits from Tavily.** Search results include image URLs for public figures. Use these for portraits - zero latency, no image gen API needed.
+- **ElevenLabs for expert voice output.** Already supported in OpenClaw. Wire per-agent in TOOLS.md.
+- **System prompts over fine-tuning/RAG.** Well-crafted SOUL.md files pull from LLM's existing knowledge. Tavily adds fresh context for Personality Factory only.
+
+### API Integrations
+
+| API | Role | Integration Effort |
+|---|---|---|
+| **Tavily** | Personality Factory: search any expert, get fresh quotes + image URL | `pip install tavily-python`, one function call. ~15 min. |
+| **Reka Speech** | Transcribe user's spoken task to text. Input: WAV 16kHz. | REST API, `X-Api-Key` header. ~20 min. |
+| **Modulate** | Detect emotion/tone from same audio blob. Adds context to dispatch ("user sounds stressed"). | REST API, multipart form. ~30 min. |
+| **ElevenLabs** | Expert voice output. Already in OpenClaw. | Wire per-agent in TOOLS.md. ~20 min. |
+| **Bedrock** | Dispatch call + Personality Factory LLM. Already configured. | Already working. 0 min. |
+
+### Pre-Build Checklist (Do Before Coding)
+
+- [ ] `brew install ffmpeg` - required for Reka audio conversion
+- [ ] Sign up at `https://platform.reka.ai` - get API key
+- [ ] Sign up at `https://app.tavily.com` - get API key
+- [ ] Submit Modulate signup request at `https://www.modulate-developer-apis.com/web/signup-request.html`
+- [ ] Set up burner X/Reddit account for rage bait demo, stay logged in
+- [ ] Test `openclaw agent --agent main --message "open google.com"` to confirm browser control works
 
 ---
 
