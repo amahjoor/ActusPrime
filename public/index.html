@@ -171,6 +171,38 @@
       border-radius: 2px;
     }
 
+    /* ── Browser View ───────────────────────────── */
+    .browser-view {
+      border: 1px solid rgba(255, 255, 255, 0.08);
+      background: rgba(0, 0, 0, 0.26);
+      border-radius: 12px;
+      margin-bottom: 14px;
+      overflow: hidden;
+    }
+
+    .browser-view-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 12px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+      font-size: 12px;
+      color: #9ca3af;
+      letter-spacing: 0.2px;
+    }
+
+    .browser-view-body {
+      margin: 0;
+      padding: 10px 12px;
+      max-height: 180px;
+      overflow: auto;
+      white-space: pre-wrap;
+      font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+      font-size: 11px;
+      line-height: 1.5;
+      color: #cfd3da;
+    }
+
     /* ── Input Area ──────────────────────────────── */
     .input-area {
       display: flex;
@@ -251,6 +283,24 @@
 
     .btn-mute:hover { opacity: 0.8; }
     .btn-mute.muted { opacity: 0.2; }
+
+    .btn-switch {
+      padding: 8px 14px;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: 8px;
+      color: #888;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s;
+      flex-shrink: 0;
+    }
+
+    .btn-switch:hover {
+      background: rgba(255, 255, 255, 0.1);
+      color: #ccc;
+    }
   </style>
 </head>
 <body>
@@ -268,11 +318,19 @@
         <div class="expert-domain" id="expert-domain"></div>
         <div class="expert-reasoning" id="expert-reasoning"></div>
       </div>
+      <button class="btn btn-switch" id="switch-btn" title="Switch to a different expert">New Expert</button>
     </div>
 
     <div id="status" class="status"></div>
 
     <div class="output-feed" id="output-feed"></div>
+    <div class="browser-view">
+      <div class="browser-view-head">
+        <span>Agent Browser View</span>
+        <button class="btn btn-switch" id="browser-refresh-btn" title="Refresh what the browser tool sees">Refresh</button>
+      </div>
+      <pre class="browser-view-body" id="browser-snapshot">(waiting for snapshot)</pre>
+    </div>
 
     <div class="input-area">
       <button class="btn btn-mic" id="mic-btn" title="Hold to record">&#127908;</button>
@@ -291,17 +349,25 @@
     const expertReasoning = document.getElementById('expert-reasoning');
     const statusEl = document.getElementById('status');
     const outputFeed = document.getElementById('output-feed');
+    const browserSnapshotEl = document.getElementById('browser-snapshot');
+    const browserRefreshBtn = document.getElementById('browser-refresh-btn');
     const taskInput = document.getElementById('task-input');
     const sendBtn = document.getElementById('send-btn');
     const micBtn = document.getElementById('mic-btn');
     const muteBtn = document.getElementById('mute-btn');
+    const switchBtn = document.getElementById('switch-btn');
 
     let isRunning = false;
     let mediaRecorder = null;
     let audioChunks = [];
     let currentExpertName = '';
-    let outputBuffer = ''; // accumulates text for TTS
+    let currentAgentId = null; // tracks active expert session
+    let outputBuffer = '';
     let isMuted = false;
+    let browserSnapshotPollTimer = null;
+    let browserSnapshotBusy = false;
+    let avatarRequestSeq = 0;
+    const expertAvatarCache = new Map();
 
     // ── TTS Voice Output (Edge Neural TTS via server, Web Speech API fallback) ──
 
@@ -315,6 +381,36 @@
     let ttsQueue = [];
     let ttsPlaying = false;
     let ttsServerAvailable = true; // falls back to Web Speech if server TTS fails
+    const FALLBACK_TTS_RATE = 1.25;
+
+    // Keeps UI markdown formatting while preventing TTS from reading markdown syntax aloud.
+    function markdownToSpeechText(input) {
+      if (typeof input !== 'string') return '';
+
+      let text = input.replace(/\r\n?/g, '\n');
+
+      text = text
+        .replace(/```[a-zA-Z0-9_-]*\n([\s\S]*?)```/g, '$1')
+        .replace(/`([^`]+)`/g, '$1')
+        .replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1')
+        .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+        .replace(/^\s{0,3}#{1,6}\s+/gm, '')
+        .replace(/^\s{0,3}>\s?/gm, '')
+        .replace(/^\s*[-*+]\s+\[(?:x|X| )\]\s+/gm, '')
+        .replace(/^\s*[-*+]\s+/gm, '')
+        .replace(/^\s*\d+\.\s+/gm, '')
+        .replace(/^\s*([-*_])(?:\s*\1){2,}\s*$/gm, ' ')
+        .replace(/(\*\*|__)(.*?)\1/g, '$2')
+        .replace(/(\*|_)(.*?)\1/g, '$2')
+        .replace(/~~(.*?)~~/g, '$1')
+        .replace(/\\([\\`*_[\]{}()#+\-.!>])/g, '$1');
+
+      return text
+        .replace(/\n{2,}/g, '. ')
+        .replace(/\n+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    }
 
     async function playNextInQueue() {
       if (ttsPlaying || ttsQueue.length === 0) return;
@@ -359,15 +455,17 @@
       const utterance = new SpeechSynthesisUtterance(text);
       const voice = voices.find(v => v.lang.startsWith('en')) || voices[0];
       if (voice) utterance.voice = voice;
-      utterance.rate = 1.05;
+      utterance.rate = FALLBACK_TTS_RATE;
       utterance.onend = () => { ttsPlaying = false; playNextInQueue(); };
       utterance.onerror = () => { ttsPlaying = false; playNextInQueue(); };
       synth.speak(utterance);
     }
 
     function speakText(text) {
-      if (!text.trim() || isMuted) return;
-      ttsQueue.push({ text, expert: currentExpertName });
+      if (isMuted) return;
+      const plainText = markdownToSpeechText(text);
+      if (!plainText) return;
+      ttsQueue.push({ text: plainText, expert: currentExpertName });
       playNextInQueue();
     }
 
@@ -400,17 +498,87 @@
       statusEl.className = 'status';
     }
 
+    async function refreshBrowserSnapshot() {
+      if (browserSnapshotBusy) return;
+      browserSnapshotBusy = true;
+      try {
+        const res = await fetch(`${API}/api/browser/snapshot?limit=120`);
+        const data = await res.json();
+        if (!res.ok) {
+          browserSnapshotEl.textContent = `[snapshot unavailable] ${data.error || 'unknown error'}`;
+          return;
+        }
+        browserSnapshotEl.textContent = data.snapshot || '(empty snapshot)';
+      } catch (e) {
+        browserSnapshotEl.textContent = `[snapshot error] ${e.message}`;
+      } finally {
+        browserSnapshotBusy = false;
+      }
+    }
+
+    function startBrowserSnapshotPolling() {
+      if (browserSnapshotPollTimer) return;
+      browserSnapshotPollTimer = setInterval(refreshBrowserSnapshot, 5000);
+    }
+
+    function renderExpertInitial(expert) {
+      expertPortrait.innerHTML = '';
+      expertPortrait.textContent = String(expert || '?').trim().charAt(0).toUpperCase();
+      expertPortrait.style.fontSize = '32px';
+    }
+
+    function renderExpertImage(imageUrl, expert) {
+      expertPortrait.innerHTML = '';
+      expertPortrait.style.fontSize = '';
+      const img = document.createElement('img');
+      img.src = imageUrl;
+      img.alt = `${expert} portrait`;
+      img.referrerPolicy = 'no-referrer';
+      img.loading = 'eager';
+      img.onerror = () => renderExpertInitial(expert);
+      expertPortrait.appendChild(img);
+    }
+
+    async function loadExpertPortrait(expert) {
+      const name = String(expert || '').trim();
+      if (!name) {
+        renderExpertInitial('?');
+        return;
+      }
+
+      const cacheKey = name.toLowerCase();
+      const requestSeq = ++avatarRequestSeq;
+
+      const cached = expertAvatarCache.get(cacheKey);
+      if (cached) {
+        renderExpertImage(cached, name);
+        return;
+      }
+
+      renderExpertInitial(name);
+
+      try {
+        const res = await fetch(`${API}/api/avatar?name=${encodeURIComponent(name)}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        if (requestSeq !== avatarRequestSeq) return;
+        if (!data?.url) return;
+
+        expertAvatarCache.set(cacheKey, data.url);
+        renderExpertImage(data.url, name);
+      } catch (e) {
+        console.warn('[avatar] lookup failed:', e.message);
+      }
+    }
+
     function showExpert(data) {
       expertName.textContent = data.expert;
       expertDomain.textContent = data.domain;
       expertReasoning.textContent = data.reasoning;
-
-      // Use first letter as fallback portrait
-      expertPortrait.innerHTML = '';
-      expertPortrait.textContent = data.expert.charAt(0);
-      expertPortrait.style.fontSize = '32px';
+      void loadExpertPortrait(data.expert);
 
       expertCard.className = 'expert-card visible';
+      taskInput.placeholder = `Continue talking to ${data.expert}...`;
     }
 
     async function sendTask(task) {
@@ -420,8 +588,37 @@
       outputFeed.textContent = '';
       outputBuffer = '';
       cancelAllSpeech();
-      expertCard.className = 'expert-card';
 
+      // If we already have an active expert, send directly to /api/run (no re-dispatch)
+      if (currentAgentId) {
+        setStatus(`${currentExpertName} is working...`);
+
+        try {
+          const res = await fetch(`${API}/api/run`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ agentId: currentAgentId, message: task }),
+          });
+          if (!res.ok) {
+            const detail = await res.text();
+            throw new Error(`Run failed (${res.status}): ${detail}`);
+          }
+          if (!res.body) {
+            throw new Error('Run failed: missing stream body');
+          }
+
+          await handleSSEStream(res);
+        } catch (e) {
+          setStatus('Connection error: ' + e.message, '');
+        }
+
+        isRunning = false;
+        sendBtn.disabled = false;
+        return;
+      }
+
+      // No active expert: run full pipeline (dispatch -> generate? -> run)
+      expertCard.className = 'expert-card';
       setStatus('Analyzing task...', 'dispatching');
 
       try {
@@ -430,51 +627,15 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ task }),
         });
-
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = '';
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split('\n');
-          buffer = lines.pop();
-
-          for (const line of lines) {
-            if (!line.startsWith('data: ')) continue;
-            try {
-              const data = JSON.parse(line.slice(6));
-
-              if (data.type === 'dispatch') {
-                showExpert(data);
-                currentExpertName = data.expert;
-                setStatus(`${data.expert} is taking over...`);
-              } else if (data.type === 'status') {
-                const cls = data.stage === 'dispatch' ? 'dispatching' :
-                            data.stage === 'factory' ? 'generating' : '';
-                setStatus(data.message, cls);
-              } else if (data.type === 'output') {
-                outputFeed.textContent += data.text;
-                outputFeed.scrollTop = outputFeed.scrollHeight;
-                // Buffer text for TTS and speak at sentence boundaries
-                outputBuffer += data.text;
-                flushSpeechBuffer();
-              } else if (data.type === 'done') {
-                clearStatus();
-                // Speak any remaining buffered text
-                if (outputBuffer.trim()) {
-                  speakText(outputBuffer.trim());
-                  outputBuffer = '';
-                }
-              } else if (data.type === 'error') {
-                setStatus('Error: ' + data.message, '');
-              }
-            } catch {}
-          }
+        if (!res.ok) {
+          const detail = await res.text();
+          throw new Error(`Pipeline failed (${res.status}): ${detail}`);
         }
+        if (!res.body) {
+          throw new Error('Pipeline failed: missing stream body');
+        }
+
+        await handleSSEStream(res);
       } catch (e) {
         setStatus('Connection error: ' + e.message, '');
       }
@@ -483,7 +644,71 @@
       sendBtn.disabled = false;
     }
 
+    // Shared SSE stream handler for both pipeline and run endpoints
+    async function handleSSEStream(res) {
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop();
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue;
+          try {
+            const data = JSON.parse(line.slice(6));
+
+            if (data.type === 'dispatch') {
+              showExpert(data);
+              currentExpertName = data.expert;
+              currentAgentId = data.agentId;
+              setStatus(`${data.expert} is taking over...`);
+            } else if (data.type === 'status') {
+              const cls = data.stage === 'dispatch' ? 'dispatching' :
+                          data.stage === 'factory' ? 'generating' : '';
+              setStatus(data.message, cls);
+            } else if (data.type === 'output') {
+              outputFeed.textContent += data.text;
+              outputFeed.scrollTop = outputFeed.scrollHeight;
+              outputBuffer += data.text;
+              flushSpeechBuffer();
+            } else if (data.type === 'done') {
+              clearStatus();
+              if (outputBuffer.trim()) {
+                speakText(outputBuffer.trim());
+                outputBuffer = '';
+              }
+            } else if (data.type === 'error') {
+              setStatus('Error: ' + data.message, '');
+            }
+          } catch {}
+        }
+      }
+    }
+
+    function resetExpert() {
+      currentAgentId = null;
+      currentExpertName = '';
+      expertCard.className = 'expert-card';
+      outputFeed.textContent = '';
+      cancelAllSpeech();
+      clearStatus();
+      taskInput.placeholder = 'Tell it what you need done...';
+      taskInput.focus();
+    }
+
     // ── Event listeners ──────────────────────────
+
+    browserRefreshBtn.addEventListener('click', () => {
+      void refreshBrowserSnapshot();
+    });
+
+    switchBtn.addEventListener('click', resetExpert);
 
     muteBtn.addEventListener('click', () => {
       isMuted = !isMuted;
@@ -507,32 +732,79 @@
       }
     });
 
+    // Keep a running readout of the browser tool's current page tree.
+    startBrowserSnapshotPolling();
+    void refreshBrowserSnapshot();
+
     // ── Mic recording ────────────────────────────
 
-    micBtn.addEventListener('mousedown', startRecording);
-    micBtn.addEventListener('mouseup', stopRecording);
-    micBtn.addEventListener('mouseleave', stopRecording);
-    micBtn.addEventListener('touchstart', (e) => { e.preventDefault(); startRecording(); });
-    micBtn.addEventListener('touchend', (e) => { e.preventDefault(); stopRecording(); });
+    // Pointer capture keeps "hold to record" active even if the cursor drifts off the button.
+    micBtn.addEventListener('pointerdown', async (e) => {
+      e.preventDefault();
+      micBtn.setPointerCapture?.(e.pointerId);
+      await startRecording();
+    });
+    micBtn.addEventListener('pointerup', (e) => {
+      e.preventDefault();
+      stopRecording();
+    });
+    micBtn.addEventListener('pointercancel', stopRecording);
+    document.addEventListener('pointerup', stopRecording);
 
     async function startRecording() {
       if (mediaRecorder && mediaRecorder.state === 'recording') return;
       try {
+        if (!navigator.mediaDevices?.getUserMedia) {
+          setStatus('Microphone capture is not supported in this browser', '');
+          return;
+        }
+        if (typeof MediaRecorder === 'undefined') {
+          setStatus('MediaRecorder is not supported in this browser', '');
+          return;
+        }
+
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        mediaRecorder = new MediaRecorder(stream);
+        const preferredMimeType = [
+          'audio/webm;codecs=opus',
+          'audio/webm',
+          'audio/mp4',
+        ].find((t) => MediaRecorder.isTypeSupported?.(t));
+
+        mediaRecorder = preferredMimeType
+          ? new MediaRecorder(stream, { mimeType: preferredMimeType })
+          : new MediaRecorder(stream);
+
+        const mimeType = mediaRecorder.mimeType || preferredMimeType || 'audio/webm';
+        const recordingStartedAt = Date.now();
         audioChunks = [];
 
-        mediaRecorder.ondataavailable = (e) => audioChunks.push(e.data);
+        mediaRecorder.ondataavailable = (e) => {
+          if (e.data && e.data.size > 0) audioChunks.push(e.data);
+        };
         mediaRecorder.onstop = async () => {
           stream.getTracks().forEach(t => t.stop());
-          const blob = new Blob(audioChunks, { type: 'audio/webm' });
-          await transcribeAudio(blob);
+          const durationMs = Date.now() - recordingStartedAt;
+          const totalBytes = audioChunks.reduce((sum, c) => sum + c.size, 0);
+
+          // Very short clips are usually accidental taps and produce empty transcripts.
+          if (durationMs < 250 || totalBytes === 0) {
+            setStatus('No audio captured. Hold the mic button while speaking.', '');
+            return;
+          }
+
+          const blob = new Blob(audioChunks, { type: mimeType });
+          await transcribeAudio(blob, mimeType);
         };
 
         mediaRecorder.start();
         micBtn.classList.add('recording');
+        setStatus('Listening... release the mic button to transcribe.', 'dispatching');
       } catch (e) {
         console.error('Mic error:', e);
+        const msg = e?.name === 'NotAllowedError'
+          ? 'Microphone permission denied. Enable mic access for this site.'
+          : `Mic error: ${e.message || String(e)}`;
+        setStatus(msg, '');
       }
     }
 
@@ -543,25 +815,32 @@
       }
     }
 
-    async function transcribeAudio(blob) {
+    async function transcribeAudio(blob, mimeType = 'audio/webm') {
       setStatus('Transcribing...', 'dispatching');
       try {
         const form = new FormData();
-        form.append('audio', blob, 'recording.webm');
+        const extension = mimeType.includes('mp4') ? 'm4a' : 'webm';
+        form.append('audio', blob, `recording.${extension}`);
 
         const res = await fetch(`${API}/api/transcribe`, {
           method: 'POST',
           body: form,
         });
 
+        if (!res.ok) {
+          const errorBody = await res.text();
+          throw new Error(`Transcription failed (${res.status}): ${errorBody}`);
+        }
+
         const data = await res.json();
-        if (data.text) {
-          taskInput.value = data.text;
+        const text = (data.text || '').trim();
+        if (text) {
+          taskInput.value = text;
           clearStatus();
           // Auto-send after transcription
-          sendTask(data.text);
+          sendTask(text);
         } else {
-          setStatus('Could not transcribe audio', '');
+          setStatus('No speech detected. Try speaking louder/closer to the mic.', '');
         }
       } catch (e) {
         setStatus('Transcription error: ' + e.message, '');
