@@ -20,7 +20,7 @@ import { join } from "path";
 import { fileURLToPath } from "url";
 import { dirname } from "path";
 import "dotenv/config";
-import { tts as edgeTts } from "edge-tts";
+import { EdgeTTS } from "node-edge-tts";
 
 import { dispatch, generateExpert, runExpertStream } from "./engine.js";
 
@@ -310,38 +310,15 @@ app.post("/api/emotion", upload.single("audio"), async (req, res) => {
 // ── POST /api/tts (Microsoft Edge Neural TTS - free, no API key) ────────────
 
 // Microsoft Edge neural voices mapped to expert archetypes.
+// Aria is the most human-like en-US voice — used as default for all experts.
 // Full list: https://learn.microsoft.com/en-us/azure/ai-services/speech-service/language-support
 const EDGE_VOICES = {
-  // Deep, authoritative — philosophers, statesmen
-  deep_male: 'en-US-GuyNeural',
-  // Warm, articulate — founders, thought leaders
-  warm_male: 'en-GB-RyanNeural',
-  // Calm, wise — scholars, scientists
-  calm_male: 'en-US-DavisNeural',
-  // Energetic — entrepreneurs, tech leaders
-  energetic_male: 'en-US-JasonNeural',
-  // Female voices for variety
-  authoritative_female: 'en-US-JennyNeural',
-  warm_female: 'en-GB-SoniaNeural',
-  // Default
-  default: 'en-US-GuyNeural',
+  // Aria: best overall, smooth and expressive
+  default: 'en-US-AriaNeural',
 };
 
-// Map expert names to voice archetypes
-function getEdgeVoice(expertName) {
-  const lower = (expertName || '').toLowerCase();
-  if (lower.includes('aurelius') || lower.includes('marcus'))
-    return EDGE_VOICES.deep_male;
-  if (lower.includes('lincoln') || lower.includes('abraham'))
-    return EDGE_VOICES.calm_male;
-  if (lower.includes('graham') || lower.includes('paul'))
-    return EDGE_VOICES.warm_male;
-  if (lower.includes('jobs') || lower.includes('steve'))
-    return EDGE_VOICES.energetic_male;
-  if (lower.includes('socrates') || lower.includes('einstein') || lower.includes('aristotle'))
-    return EDGE_VOICES.calm_male;
-  if (lower.includes('curie') || lower.includes('earhart') || lower.includes('cleopatra'))
-    return EDGE_VOICES.authoritative_female;
+// All experts use Aria for now — best quality voice available
+function getEdgeVoice() {
   return EDGE_VOICES.default;
 }
 
@@ -350,15 +327,24 @@ app.post('/api/tts', async (req, res) => {
     const { text, expert } = req.body;
     if (!text) return res.status(400).json({ error: 'text is required' });
 
-    const voice = getEdgeVoice(expert || '');
+    const voice = getEdgeVoice();
+    const tmpFile = `/tmp/actusprime-tts-${Date.now()}.mp3`;
 
     console.log(`[tts] Generating speech for "${text.slice(0, 50)}..." voice=${voice}`);
 
-    const audioBuffer = await edgeTts(text, { voice });
+    const tts = new EdgeTTS({
+      voice,
+      lang: 'en-US',
+      outputFormat: 'audio-24khz-96kbitrate-mono-mp3',
+    });
+    await tts.ttsPromise(text, tmpFile);
+
+    const audioBuffer = readFileSync(tmpFile);
+    try { const { unlinkSync } = await import("fs"); unlinkSync(tmpFile); } catch {}
 
     res.setHeader('Content-Type', 'audio/mpeg');
     res.setHeader('Cache-Control', 'no-cache');
-    res.send(Buffer.from(audioBuffer));
+    res.send(audioBuffer);
   } catch (e) {
     console.error('[api:tts]', e.message);
     if (!res.headersSent) {
