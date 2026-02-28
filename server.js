@@ -14,15 +14,18 @@
 import express from "express";
 import cors from "cors";
 import multer from "multer";
-import { execSync } from "child_process";
+import { execSync, execFile } from "child_process";
 import { readFileSync, existsSync } from "fs";
 import { join } from "path";
 import { fileURLToPath } from "url";
 import { dirname } from "path";
+import { promisify } from "util";
 import "dotenv/config";
 import { EdgeTTS } from "node-edge-tts";
 
 import { dispatch, generateExpert, runExpertStream } from "./engine.js";
+import { markdownToSpeechText } from "./shared/markdownToSpeech.js";
+import { lookupAvatarImage, sanitizePersonName } from "./shared/avatarLookup.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -34,6 +37,33 @@ app.use(express.json());
 const upload = multer({ storage: multer.memoryStorage() });
 
 const PORT = process.env.PORT || 3456;
+const execFileAsync = promisify(execFile);
+
+function readGatewayToken() {
+  try {
+    const configPath = join(process.env.HOME || "", ".openclaw", "openclaw.json");
+    if (!existsSync(configPath)) return process.env.OPENCLAW_GATEWAY_TOKEN || "";
+
+    const configRaw = readFileSync(configPath, "utf-8");
+    const config = JSON.parse(configRaw);
+    return config?.gateway?.auth?.token || process.env.OPENCLAW_GATEWAY_TOKEN || "";
+  } catch {
+    return process.env.OPENCLAW_GATEWAY_TOKEN || "";
+  }
+}
+
+const avatarCache = new Map();
+const AVATAR_CACHE_TTL_MS = 1000 * 60 * 60 * 6;
+
+function getCachedAvatar(cacheKey) {
+  const item = avatarCache.get(cacheKey);
+  if (!item) return null;
+  if (Date.now() - item.createdAt > AVATAR_CACHE_TTL_MS) {
+    avatarCache.delete(cacheKey);
+    return null;
+  }
+  return item.value;
+}
 
 // ── POST /api/dispatch ──────────────────────────────────────────────────────
 
@@ -316,6 +346,7 @@ const EDGE_VOICES = {
   // Aria: best overall, smooth and expressive
   default: 'en-US-AriaNeural',
 };
+const EDGE_TTS_RATE = process.env.EDGE_TTS_RATE || "+35%";
 
 // All experts use Aria for now — best quality voice available
 function getEdgeVoice() {
@@ -324,20 +355,26 @@ function getEdgeVoice() {
 
 app.post('/api/tts', async (req, res) => {
   try {
-    const { text, expert } = req.body;
+    const { text } = req.body;
     if (!text) return res.status(400).json({ error: 'text is required' });
+
+    const speechText = markdownToSpeechText(text);
+    if (!speechText) {
+      return res.status(400).json({ error: "text has no speakable content" });
+    }
 
     const voice = getEdgeVoice();
     const tmpFile = `/tmp/actusprime-tts-${Date.now()}.mp3`;
 
-    console.log(`[tts] Generating speech for "${text.slice(0, 50)}..." voice=${voice}`);
+    console.log(`[tts] Generating speech for "${speechText.slice(0, 50)}..." voice=${voice}`);
 
     const tts = new EdgeTTS({
       voice,
       lang: 'en-US',
       outputFormat: 'audio-24khz-96kbitrate-mono-mp3',
+      rate: EDGE_TTS_RATE,
     });
-    await tts.ttsPromise(text, tmpFile);
+    await tts.ttsPromise(speechText, tmpFile);
 
     const audioBuffer = readFileSync(tmpFile);
     try { const { unlinkSync } = await import("fs"); unlinkSync(tmpFile); } catch {}
@@ -350,6 +387,81 @@ app.post('/api/tts', async (req, res) => {
     if (!res.headersSent) {
       res.status(500).json({ error: e.message });
     }
+  }
+});
+
+// ── GET /api/avatar (expert headshot URL lookup) ───────────────────────────
+
+app.get("/api/avatar", async (req, res) => {
+  try {
+    const name = sanitizePersonName(req.query.name);
+    if (!name) {
+      return res.status(400).json({ error: "name is required" });
+    }
+
+    const cacheKey = name.toLowerCase();
+    const cached = getCachedAvatar(cacheKey);
+    if (cached) {
+      return res.json({ ...cached, cached: true });
+    }
+
+    const result = await lookupAvatarImage(name);
+    if (!result?.url) {
+      return res.status(404).json({ error: `No avatar image found for "${name}"` });
+    }
+
+    avatarCache.set(cacheKey, {
+      createdAt: Date.now(),
+      value: result,
+    });
+
+    res.json({ ...result, cached: false });
+  } catch (e) {
+    console.error("[api:avatar]", e.message);
+    res.status(500).json({ error: e.message });
+  }
+});
+
+// ── GET /api/browser/snapshot (agent-visible browser tree) ─────────────────
+
+app.get("/api/browser/snapshot", async (req, res) => {
+  try {
+    const token = readGatewayToken();
+    const requested = Number.parseInt(String(req.query.limit || "120"), 10);
+    const limit = Number.isFinite(requested)
+      ? Math.max(20, Math.min(requested, 300))
+      : 120;
+
+    const args = [
+      "browser",
+      "--browser-profile",
+      "chrome",
+      "snapshot",
+      "--limit",
+      String(limit),
+    ];
+    if (token) {
+      args.push("--token", token);
+    }
+
+    const { stdout } = await execFileAsync("openclaw", args, {
+      encoding: "utf-8",
+      timeout: 12000,
+      maxBuffer: 1024 * 1024 * 2,
+    });
+    const snapshot = String(stdout || "").trim();
+
+    res.json({
+      snapshot,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (e) {
+    const detail = String(e?.stderr || e?.stdout || e?.message || "").trim();
+    if (typeof e?.code === "number" || e?.signal || e?.killed) {
+      return res.status(503).json({ error: detail || "browser snapshot failed" });
+    }
+    console.error("[api:browser:snapshot]", detail || e.message);
+    res.status(500).json({ error: detail || e.message });
   }
 });
 
